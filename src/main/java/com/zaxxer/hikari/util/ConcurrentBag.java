@@ -59,7 +59,6 @@ import com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry;
  * the "remove" method can completely remove an object from the bag.
  *
  * @author Brett Wooldridge
- *
  * @param <T> the templated type to store in the bag
  */
 public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseable
@@ -70,6 +69,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
    private final boolean weakThreadLocals;
 
    private final ThreadLocal<List<Object>> threadList;
+   //listener 有什么用？
    private final IBagStateListener listener;
    private final AtomicInteger waiters;
    private volatile boolean closed;
@@ -90,6 +90,11 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
 
    public interface IBagStateListener
    {
+      /**
+       * 请求添加bag
+       * ConcurrentBag不控制Bag中资源的数量，由Listener判断是否可以添加资源
+       * @param waiting
+       */
       void addBagItem(int waiting);
    }
 
@@ -142,6 +147,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
          for (T bagEntry : sharedList) {
             if (bagEntry.compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
                // If we may have stolen another waiter's connection, request another bag add.
+               // 如果还有其他线程在等待,尝试给其他线程添加资源
                if (waiting > 1) {
                   listener.addBagItem(waiting - 1);
                }
@@ -149,12 +155,15 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
             }
          }
 
+         //如果没有获取到资源，添加资源
+         //添加资源后，下面执行poll()更有可能获取到连接
          listener.addBagItem(waiting);
 
          timeout = timeUnit.toNanos(timeout);
          do {
             final long start = currentTime();
             final T bagEntry = handoffQueue.poll(timeout, NANOSECONDS);
+            //bagEntry == null,说明超时
             if (bagEntry == null || bagEntry.compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
                return bagEntry;
             }
@@ -182,6 +191,8 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
    {
       bagEntry.setState(STATE_NOT_IN_USE);
 
+      //如果有waiters等待，则把资源交出去再返回
+      //交出去：1.状态改变，说明被其他线程窃取成功了。
       for (int i = 0; waiters.get() > 0; i++) {
          if (bagEntry.getState() != STATE_NOT_IN_USE || handoffQueue.offer(bagEntry)) {
             return;
@@ -193,7 +204,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
             yield();
          }
       }
-
+      //如果没有其他线程在等待或者，则把这个资源local化
       final List<Object> threadLocalList = threadList.get();
       if (threadLocalList.size() < 50) {
          threadLocalList.add(weakThreadLocals ? new WeakReference<>(bagEntry) : bagEntry);
@@ -215,6 +226,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       sharedList.add(bagEntry);
 
       // spin until a thread takes it or none are waiting
+      //如果有线程在等待，则等待把线程交给其他线程,不会阻塞，直到没有线程等待位置
       while (waiters.get() > 0 && bagEntry.getState() == STATE_NOT_IN_USE && !handoffQueue.offer(bagEntry)) {
          yield();
       }
@@ -231,6 +243,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
     */
    public boolean remove(final T bagEntry)
    {
+      //为什么会有从STATE_IN_USE -> STATE_REMOVED的转换？IN_USE状态可以直接删除吗？
       if (!bagEntry.compareAndSet(STATE_IN_USE, STATE_REMOVED) && !bagEntry.compareAndSet(STATE_RESERVED, STATE_REMOVED) && !closed) {
          LOGGER.warn("Attempt to remove an object from the bag that was not borrowed or reserved: {}", bagEntry);
          return false;
@@ -387,7 +400,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
          if (System.getProperty("com.zaxxer.hikari.useWeakReferences") != null) {   // undocumented manual override of WeakReference behavior
             return Boolean.getBoolean("com.zaxxer.hikari.useWeakReferences");
          }
-
+         //如果在容器运行，则使用weakThreadLocals
          return getClass().getClassLoader() != ClassLoader.getSystemClassLoader();
       }
       catch (SecurityException se) {

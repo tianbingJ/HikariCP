@@ -85,17 +85,27 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
    private static final String DEAD_CONNECTION_MESSAGE = "(connection is dead)";
 
    private final PoolEntryCreator poolEntryCreator = new PoolEntryCreator(null /*logging prefix*/);
+   //fillPool中批量添加的最后一个connection用postFillPoolEntryCreator, 之前的用poolEntryCreator
    private final PoolEntryCreator postFillPoolEntryCreator = new PoolEntryCreator("After adding ");
+
+   //添加Connection的任务队列，blocking Queue.
    private final Collection<Runnable> addConnectionQueue;
+   //添加Connection的Executor,单线程
    private final ThreadPoolExecutor addConnectionExecutor;
+   //关闭Connection的Executor
    private final ThreadPoolExecutor closeConnectionExecutor;
 
+   //保存连接池资源的bag
    private final ConcurrentBag<PoolEntry> connectionBag;
 
+   //每30s运行一次的管家线程
+   private final ScheduledExecutorService houseKeepingExecutorService;
+
+   //执行线程是houseKeeping
    private final ProxyLeakTaskFactory leakTaskFactory;
+
    private final SuspendResumeLock suspendResumeLock;
 
-   private final ScheduledExecutorService houseKeepingExecutorService;
    private ScheduledFuture<?> houseKeeperTask;
 
    /**
@@ -333,7 +343,9 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
    @Override
    public void addBagItem(final int waiting)
    {
+      //为什么要 >= 而不是 > ?
       final boolean shouldAdd = waiting - addConnectionQueue.size() >= 0; // Yes, >= is intentional.
+      //创建一个新增任务
       if (shouldAdd) {
          addConnectionExecutor.submit(poolEntryCreator);
       }
@@ -537,6 +549,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
    }
 
    /**
+    * 快速失败测试，创建连接池时就检查与DB的连通性
     * If initializationFailFast is configured, check that we have DB connectivity.
     *
     * @throws PoolInitializationException if fails to create or validate connection
@@ -767,6 +780,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
             final long now = currentTime();
 
             // Detect retrograde time, allowing +128ms as per NTP spec.
+            //检测到时钟倒退，evict所有connection：当前时间小于上次调度时间 + 任务时间间隔
             if (plusMillis(now, 128) < plusMillis(previous, housekeepingPeriodMs)) {
                logger.warn("{} - Retrograde clock change detected (housekeeper delta={}), soft-evicting connections from pool.",
                            poolName, elapsedDisplayString(previous, now));
@@ -782,6 +796,7 @@ public final class HikariPool extends PoolBase implements HikariPoolMXBean, IBag
             previous = now;
 
             String afterPrefix = "Pool ";
+            //如果设置了idleTimeout并且最小限制的连接数量 小于 连接池容量
             if (idleTimeout > 0L && config.getMinimumIdle() < config.getMaximumPoolSize()) {
                logPoolState("Before cleanup ");
                afterPrefix = "After cleanup  ";

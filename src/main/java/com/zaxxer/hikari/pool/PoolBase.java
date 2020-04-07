@@ -127,6 +127,11 @@ abstract class PoolBase
    //                           JDBC methods
    // ***********************************************************************
 
+   /**
+    *
+    * @param connection
+    * @param closureReason
+    */
    void quietlyCloseConnection(final Connection connection, final String closureReason)
    {
       if (connection != null) {
@@ -134,6 +139,7 @@ abstract class PoolBase
             logger.debug("{} - Closing connection {}: {}", poolName, connection, closureReason);
 
             try {
+               //为什么要设置timeout？
                setNetworkTimeout(connection, SECONDS.toMillis(15));
             }
             catch (SQLException e) {
@@ -149,6 +155,11 @@ abstract class PoolBase
       }
    }
 
+   /**
+    * Connection是否存活，通过心跳检测（select 1 or ping）判断
+    * @param connection
+    * @return
+    */
    boolean isConnectionAlive(final Connection connection)
    {
       try {
@@ -557,6 +568,7 @@ abstract class PoolBase
    private void setNetworkTimeout(final Connection connection, final long timeoutMs) throws SQLException
    {
       if (isNetworkTimeoutSupported == TRUE) {
+         //等待回答，如果没有回答则抛出异常
          connection.setNetworkTimeout(netTimeoutExecutor, (int) timeoutMs);
       }
    }

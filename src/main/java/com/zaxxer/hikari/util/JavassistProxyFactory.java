@@ -36,6 +36,8 @@ import javassist.bytecode.ClassFile;
  * method bodies into the {@link ProxyFactory} class methods that can instantiate
  * instances of the generated proxies.
  *
+ * 为什么要生成代理类？
+ *
  * @author Brett Wooldridge
  */
 public final class JavassistProxyFactory
@@ -103,6 +105,7 @@ public final class JavassistProxyFactory
 
    /**
     *  Generate Javassist Proxy Classes
+    *  接口，
     */
    private static <T> void generateProxyClass(Class<T> primaryInterface, String superClassName, String methodBody) throws Exception
    {
